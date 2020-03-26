@@ -1,110 +1,127 @@
-#include<stdio.h>
-#include<stdlib.h>
-#include<pthread.h>
-#include<time.h>
-#include<stdlib.h>
 #include<unistd.h>
+#include<stdio.h>
+#include<pthread.h>
+#include<stdlib.h>
+#include<time.h>
 
-#define RNUM 5
-#define WNUM 5
-#define TIME 5
+#define R 5
+#define W 5
+#define X 5
 
-int shared_var = 1;
+// Global variables
+int shared_var = 0;
+int waiting_readers = 0;
 int available_readers = 0;
-int available_writers = 0;
 
+// Mutex
 pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t curr_read = PTHREAD_COND_INITIALIZER;
-pthread_cond_t curr_write = PTHREAD_COND_INITIALIZER;
 
-void *reader_func(void *arg) {
-	int i;
-	int wait_time;
-	int val = *((int*) arg);
-//	pthread_mutex_lock(&m);
-//	shared_var += 1;
-	for (i = 0; i < TIME; i++) {
-	    pthread_mutex_lock(&m);
-		 wait_time = (rand() % 3) + 1;
-		 usleep(wait_time * 1000000);
+// Condition variables
+pthread_cond_t c_rd = PTHREAD_COND_INITIALIZER;
+pthread_cond_t c_wr = PTHREAD_COND_INITIALIZER;
 
+void *reader(void* args) {
+	int val = *((int*) args);
+	int j;
+	int current_readers;
+
+	for (j = 0; j < X; j++) {
+		// Generate wait time between 1s to 3s
+		int wait_time = (rand() % 3) + 1;
 		
-
-	   	 available_readers += 1;
- 		 printf("\nReader %d[%d] entered! Value read: %d, Wait time: %ds, Available readers: %d, Available writers: %d\n",val, i+1, shared_var, wait_time, available_readers, available_writers);
-	    pthread_mutex_unlock(&m);
-	   
-            pthread_mutex_lock(&m);
-	    	available_readers -= 1;
-		printf("\nReader %d[%d] quitting!\n", val, i+1);
-
-		if (available_readers == 0) {
-			pthread_cond_signal(&curr_write);
-		}
-	    pthread_mutex_unlock(&m);
-	}
-//	pthread_mutex_unlock(&m);
-}
-
-void *writer_func(void *arg) {
-	int i;
-	int wait_time;
-	int val = *((int*) arg);
-//	pthread_mutex_lock(&m);
-	for (i = 0; i < TIME; i++) {
-	    pthread_mutex_lock(&m);
-		wait_time = (rand() % 3) + 1;
+		// Sleep
 		usleep(wait_time * 1000000);
 
-		while (available_readers != 0) {
-			pthread_cond_wait(&curr_write, &m);
-		}
+		pthread_mutex_lock(&m);
+			waiting_readers++;
+			while (available_readers == -1) {
+				pthread_cond_wait(&c_rd, &m);
+			}
+			waiting_readers--;
+			available_readers++;
+			current_readers	 = available_readers;
+		pthread_mutex_unlock(&m);
+		
+		// Print read details
+		printf("Reader %d[%d], Value read: %d, Readers present: %d --> R\n", val+1, j, shared_var, current_readers);
 
-	    	shared_var += 1;
-	    	available_writers += 1;
-		printf("\nWriter %d[%d] entered! Value written: %d, Wait time: %ds, Available readers: %d, Available writers: %d\n",val, i+1, shared_var, wait_time, available_readers, available_writers);
-	    pthread_mutex_unlock(&m);
-	    
-	    pthread_mutex_lock(&m);
-	    	available_writers -= 1;
-		printf("\nWriter %d[%d] quitting!\n", val, i+1);
-	    pthread_mutex_unlock(&m);
-
+		pthread_mutex_lock(&m);
+			available_readers--;
+			if (available_readers == 0) {
+				pthread_cond_signal(&c_wr);
+			}
+		pthread_mutex_unlock(&m);
 	}
-//	pthread_mutex_unlock(&m);
+}
+
+void *writer(void* args) {
+	int val = *((int*) args);
+	int j;
+	int current_readers;
+
+	for (j = 0; j < X; j++) {
+		// Generate wait time between 1s to 3s
+		int wait_time = (rand() % 3) + 1;
+
+		// Sleep
+		usleep(wait_time * 1000000);
+
+		pthread_mutex_lock(&m);
+			while (available_readers != 0) {
+				pthread_cond_wait(&c_wr, &m);
+			}
+			available_readers = -1;
+			current_readers = available_readers;
+		pthread_mutex_unlock(&m);
+		
+		// Update value
+		shared_var++;
+		
+		// Print writing details
+		printf("Writer %d[%d], Value written: %d, Readers present: %d --> W\n", val+1, j, shared_var, current_readers + 1);
+
+		pthread_mutex_lock(&m);
+			available_readers = 0;
+			if (waiting_readers > 0) {
+				pthread_cond_broadcast(&c_rd);
+			}
+			else {
+				pthread_cond_signal(&c_wr);
+			}
+		pthread_mutex_unlock(&m);
+	}
 }
 
 int main() {
-	srand(time(NULL));
+        srand(time(NULL));
+	pthread_t rid[R];
+	pthread_t wid[W];
+	int rnum[R];
+	int wnum[W];
+
 	int i;
-	pthread_t rid[RNUM];
-	pthread_t wid[WNUM];
 
-	int rno[RNUM];
-	int wno[WNUM];
-
-	// Create reader threads
-	for (i = 0; i < RNUM; i++) {
-		rno[i] = i;
-		pthread_create(&rid[i], NULL, reader_func, &rno[i]);
+	// Create readers
+	for (i = 0; i < R; i++) {
+		rnum[i] = i;
+		pthread_create(&rid[i], NULL, reader, &rnum[i]);
 	}
 
-	// Create writer threads
-	for (i = 0; i < WNUM; i++) {
-		wno[i] = i;
-		pthread_create(&wid[i], NULL, writer_func, &wno[i]);
+	// Create writers
+	for (i = 0; i < W; i++) {
+		wnum[i] = i;
+		pthread_create(&wid[i], NULL, writer, &wnum[i]);
 	}
 
-	// Join reader threads
-	for (i = 0; i < RNUM; i++) {
+	// Join readers
+	for (i = 0; i < R; i++) {
 		pthread_join(rid[i], NULL);
 	}
-	
-	// Join writer threads
-	for (i = 0; i < WNUM; i++) {
+
+	// Join writers
+	for (i = 0; i < W; i++) {
 		pthread_join(wid[i], NULL);
 	}
 
-	printf("\nValue: %d\nAvailable readers: %d\nAvailable writers: %d\n", shared_var, available_readers, available_writers);
 	return 0;
 }
